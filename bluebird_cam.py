@@ -796,6 +796,10 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
         cap.set(cv2.CAP_PROP_FPS, max(1.0, 1.0 / max(args.frame_interval, 0.001)))
+        
+        # Enable auto exposure and auto white balance for USB camera
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Auto exposure enabled
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)      # Autofocus enabled
 
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video device {args.video_device}")
