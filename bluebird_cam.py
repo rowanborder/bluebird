@@ -194,7 +194,7 @@ class Status:
     storage_free_gb: float = 0.0
     storage_total_gb: float = 0.0
     
-    muted: bool = False
+    muted: bool = True
     volume: float = 1.0
     recording: bool = False
     flip: bool = True
