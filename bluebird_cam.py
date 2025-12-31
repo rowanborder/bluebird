@@ -2,7 +2,7 @@
 """
 bluebird_cam.py
 
-Pi 5 plus Pi Camera Module v3 offline bird classifier with:
+Pi 5 plus Pi Camera Module v3 (or USB webcam) offline bird classifier with:
 - Motion gated classification
 - Web interface with MJPEG stream and JSON status
 - Autofocus enabled
@@ -49,7 +49,6 @@ from PIL import Image
 
 import torch
 from transformers import AutoImageProcessor, AutoModelForImageClassification, pipeline
-from picamera2 import Picamera2
 
 import cv2
 from flask import Flask, Response, jsonify
@@ -197,6 +196,7 @@ class Status:
     
     muted: bool = False
     volume: float = 1.0
+    recording: bool = True
 
 
 class Shared:
@@ -365,6 +365,13 @@ a { color: #9db7ff; text-decoration: none; }
   </div>
 
     <div class="box">
+        <div style="margin-bottom: 8px;"><strong>Recording</strong></div>
+        <div class="row">
+            <button id="recordBtn" class="pill" style="cursor: pointer; border: 2px solid #555;">Record off</button>
+        </div>
+    </div>
+
+    <div class="box">
         <div style="margin-bottom: 8px;"><strong>Detection Thresholds</strong></div>
         <div class="row" style="gap: 16px;">
             <div class="pill" style="flex: 1; max-width: 400px;">
@@ -475,6 +482,16 @@ async function tick() {
       volSlider.value = volumePercent;
     }
     volValue.textContent = volumePercent + '%';
+
+        // Recording button
+        const recordBtn = document.getElementById('recordBtn');
+        if (s.recording) {
+            recordBtn.textContent = 'Recording on';
+            recordBtn.style.background = '#337733';
+        } else {
+            recordBtn.textContent = 'Record off';
+            recordBtn.style.background = '#242424';
+        }
   } catch (e) {}
 }
 setInterval(tick, 500);
@@ -530,6 +547,17 @@ document.getElementById('darkSlider').addEventListener('input', (e) => {
             await fetch('/dark_threshold?value=' + val);
         } catch (e) {}
     }, 200);
+});
+
+// Record button handler
+document.getElementById('recordBtn').addEventListener('click', async () => {
+    try {
+        const r = await fetch('/status', {cache:'no-store'});
+        const s = await r.json();
+        const newRecording = !s.recording;
+        await fetch('/record?value=' + (newRecording ? '1' : '0'));
+        tick();
+    } catch (e) {}
 });
 </script>
 </body>
@@ -614,6 +642,15 @@ document.getElementById('darkSlider').addEventListener('input', (e) => {
         except (TypeError, ValueError):
             return jsonify({"error": "invalid value"}), 400
 
+    @app.route("/record")
+    def record():
+        from flask import request
+        value = request.args.get('value', '0')
+        recording = value == '1'
+        with shared.lock:
+            shared.status.recording = recording
+        return jsonify({"recording": recording})
+
     return app
 
 
@@ -688,16 +725,46 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
         device=0 if device == "cuda" else -1,
     )
 
-    cam = Picamera2()
-    cam.configure(cam.create_preview_configuration(main={"size": size, "format": "RGB888"}))
-    cam.start()
+    # Select camera source at runtime to support both Pi CSI and USB webcams.
+    picam = None
+    cap = None
 
-    cam.set_controls({
-        "AfMode": 2,
-        "AfTrigger": 0,
-        "AeEnable": True,
-        "AwbEnable": True,
-    })
+    if args.camera == "pi":
+        try:
+            from picamera2 import Picamera2  # Lazy import so USB mode works without the dependency
+        except ImportError as exc:
+            raise RuntimeError("picamera2 is required for --camera pi") from exc
+
+        picam = Picamera2()
+        picam.configure(picam.create_preview_configuration(main={"size": size, "format": "RGB888"}))
+        picam.start()
+
+        picam.set_controls({
+            "AfMode": 2,
+            "AfTrigger": 0,
+            "AeEnable": True,
+            "AwbEnable": True,
+        })
+
+        def read_frame() -> Optional[np.ndarray]:
+            try:
+                frame_rgb = picam.capture_array()
+                return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            except Exception:
+                return None
+
+    else:
+        cap = cv2.VideoCapture(args.video_device)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+        cap.set(cv2.CAP_PROP_FPS, max(1.0, 1.0 / max(args.frame_interval, 0.001)))
+
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open video device {args.video_device}")
+
+        def read_frame() -> Optional[np.ndarray]:
+            ok, frame = cap.read()
+            return frame if ok else None
 
     blue_kw = args.bluebird_keyword.strip().lower()
 
@@ -717,8 +784,12 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
 
     try:
         while True:
-            bgr = cam.capture_array()
-            bgr = cv2.flip(bgr, args.flip_code)
+            frame = read_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            bgr = cv2.flip(frame, args.flip_code)
 
             now = time.time()
 
@@ -766,7 +837,10 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
                     top1_score = float(preds[0]["score"])
                     category = categorize(preds, blue_kw, args.not_bird_threshold)
 
-                    if category and category != last_category:
+                    with shared.lock:
+                        is_recording = shared.status.recording
+
+                    if is_recording and category and category != last_category:
                         save_classified_frame(bgr.copy(), category, now)
                     
                     # Speak only when the category changes (with cooldown)
@@ -859,7 +933,14 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
 
     finally:
         try:
-            cam.stop()
+            if picam is not None:
+                picam.stop()
+        except Exception:
+            pass
+
+        try:
+            if cap is not None:
+                cap.release()
         except Exception:
             pass
 
@@ -875,6 +956,9 @@ def main() -> None:
 
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000)
+
+    ap.add_argument("--camera", choices=["pi", "usb"], default="pi", help="Camera source: pi CSI or USB webcam")
+    ap.add_argument("--video-device", type=int, default=0, help="USB camera device index when using --camera usb")
 
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--height", type=int, default=480)
