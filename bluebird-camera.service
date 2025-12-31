@@ -1,0 +1,26 @@
+[Unit]
+Description=Bluebird Camera Classifier
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/python3 /home/pi/bluebird_cam.py \
+    --model-dir ./models/Birds-Classifier-EfficientNetB2 \
+    --piper-model /home/pi/piper-voices/en_US-lessac-medium.onnx \
+    --host 0.0.0.0 --port 8000
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=600
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bluebird-camera
+
+[Install]
+WantedBy=multi-user.target
