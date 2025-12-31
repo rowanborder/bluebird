@@ -191,6 +191,9 @@ class Status:
     power_watts: float = 0.0
     power_avg_watts: float = 0.0
     battery_runtime_hours: float = 0.0
+
+    storage_free_gb: float = 0.0
+    storage_total_gb: float = 0.0
     
     muted: bool = False
     volume: float = 1.0
@@ -263,6 +266,15 @@ def calculate_total_power(pmic_data: Dict[str, Dict[str, float]]) -> float:
     return total_power
 
 
+def get_storage_stats(path: str = "/") -> Tuple[float, float]:
+    """Return (total_gb, free_gb) for the filesystem at path."""
+    st = os.statvfs(path)
+    total = float(st.f_frsize * st.f_blocks)
+    free = float(st.f_frsize * st.f_bavail)
+    gb = 1024.0 ** 3
+    return total / gb, free / gb
+
+
 def power_monitor_worker(shared: Shared, battery_wh: float, avg_window: int) -> None:
     """Background thread to monitor power consumption."""
     power_history = deque(maxlen=avg_window)
@@ -282,6 +294,15 @@ def power_monitor_worker(shared: Shared, battery_wh: float, avg_window: int) -> 
                     shared.status.power_watts = total_power
                     shared.status.power_avg_watts = avg_power
                     shared.status.battery_runtime_hours = runtime_hours
+
+            try:
+                total_gb, free_gb = get_storage_stats("/")
+            except Exception:
+                total_gb, free_gb = 0.0, 0.0
+
+            with shared.lock:
+                shared.status.storage_total_gb = total_gb
+                shared.status.storage_free_gb = free_gb
         except Exception:
             pass
         
@@ -339,6 +360,7 @@ a { color: #9db7ff; text-decoration: none; }
     <div class="row">
       <div class="pill" id="power">Power</div>
       <div class="pill" id="battery">Runtime</div>
+            <div class="pill" id="storage">Storage</div>
     </div>
   </div>
 
@@ -411,6 +433,12 @@ async function tick() {
     
     document.getElementById('battery').textContent =
       'Runtime ' + runtime + ' on 50Wh';
+
+        const freeGb = s.storage_free_gb || 0;
+        const totalGb = s.storage_total_gb || 0;
+        const pctFree = totalGb > 0 ? (freeGb / totalGb) * 100 : 0;
+        document.getElementById('storage').textContent =
+            'Storage ' + freeGb.toFixed(1) + '/' + totalGb.toFixed(1) + ' GB (' + pctFree.toFixed(0) + '% free)';
 
         // Threshold sliders
         const motionSlider = document.getElementById('motionSlider');
