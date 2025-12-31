@@ -196,7 +196,8 @@ class Status:
     
     muted: bool = False
     volume: float = 1.0
-    recording: bool = True
+    recording: bool = False
+    flip: bool = True
 
 
 class Shared:
@@ -372,6 +373,13 @@ a { color: #9db7ff; text-decoration: none; }
     </div>
 
     <div class="box">
+        <div style="margin-bottom: 8px;"><strong>Camera</strong></div>
+        <div class="row">
+            <button id="flipBtn" class="pill" style="cursor: pointer; border: 2px solid #555;">Flip off</button>
+        </div>
+    </div>
+
+    <div class="box">
         <div style="margin-bottom: 8px;"><strong>Detection Thresholds</strong></div>
         <div class="row" style="gap: 16px;">
             <div class="pill" style="flex: 1; max-width: 400px;">
@@ -492,6 +500,16 @@ async function tick() {
             recordBtn.textContent = 'Record off';
             recordBtn.style.background = '#242424';
         }
+
+        // Flip button
+        const flipBtn = document.getElementById('flipBtn');
+        if (s.flip) {
+            flipBtn.textContent = 'Flip on';
+            flipBtn.style.background = '#337733';
+        } else {
+            flipBtn.textContent = 'Flip off';
+            flipBtn.style.background = '#242424';
+        }
   } catch (e) {}
 }
 setInterval(tick, 500);
@@ -556,6 +574,17 @@ document.getElementById('recordBtn').addEventListener('click', async () => {
         const s = await r.json();
         const newRecording = !s.recording;
         await fetch('/record?value=' + (newRecording ? '1' : '0'));
+        tick();
+    } catch (e) {}
+});
+
+// Flip button handler
+document.getElementById('flipBtn').addEventListener('click', async () => {
+    try {
+        const r = await fetch('/status', {cache:'no-store'});
+        const s = await r.json();
+        const newFlip = !s.flip;
+        await fetch('/flip?value=' + (newFlip ? '1' : '0'));
         tick();
     } catch (e) {}
 });
@@ -650,6 +679,15 @@ document.getElementById('recordBtn').addEventListener('click', async () => {
         with shared.lock:
             shared.status.recording = recording
         return jsonify({"recording": recording})
+
+    @app.route("/flip")
+    def flip():
+        from flask import request
+        value = request.args.get('value', '0')
+        flip_enabled = value == '1'
+        with shared.lock:
+            shared.status.flip = flip_enabled
+        return jsonify({"flip": flip_enabled})
 
     return app
 
@@ -789,7 +827,11 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
                 time.sleep(0.05)
                 continue
 
-            bgr = cv2.flip(frame, args.flip_code)
+            # Read flip state from shared status
+            with shared.lock:
+                should_flip = shared.status.flip
+            
+            bgr = cv2.flip(frame, args.flip_code) if should_flip else frame
 
             now = time.time()
 
@@ -995,6 +1037,7 @@ def main() -> None:
     shared = Shared()
     shared.status.motion_threshold = args.motion_threshold
     shared.status.dark_threshold = args.dark_threshold
+    shared.status.flip = args.flip_code != 0  # Initialize flip based on args
     
     # Initialize TTS
     tts_phrases = ["Bluebird", "Not bluebird", "Not a bird"]
