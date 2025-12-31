@@ -173,6 +173,8 @@ class Status:
 
     too_dark: bool = False
     brightness: float = 0.0
+    exposure_comp: float = 0.0
+    analogue_gain: float = 1.0
 
     motion_score: float = 0.0
     motion: bool = False
@@ -380,6 +382,22 @@ a { color: #9db7ff; text-decoration: none; }
     </div>
 
     <div class="box">
+        <div style="margin-bottom: 8px;"><strong>Exposure Control</strong></div>
+        <div class="row" style="gap: 16px;">
+            <div class="pill" style="flex: 1; max-width: 400px;">
+                <label for="exposureSlider" style="margin-right: 8px;">Exposure Comp</label>
+                <input type="range" id="exposureSlider" min="-4" max="4" value="0" step="0.2" style="width: 200px; vertical-align: middle;"/>
+                <span id="exposureValue" style="margin-left: 8px;">0.0</span>
+            </div>
+            <div class="pill" style="flex: 1; max-width: 400px;">
+                <label for="gainSlider" style="margin-right: 8px;">Analogue Gain</label>
+                <input type="range" id="gainSlider" min="1" max="8" value="1" step="0.1" style="width: 200px; vertical-align: middle;"/>
+                <span id="gainValue" style="margin-left: 8px;">1.0</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="box">
         <div style="margin-bottom: 8px;"><strong>Detection Thresholds</strong></div>
         <div class="row" style="gap: 16px;">
             <div class="pill" style="flex: 1; max-width: 400px;">
@@ -471,6 +489,23 @@ async function tick() {
             darkSlider.value = darkVal;
         }
         darkValue.textContent = darkVal.toString();
+
+        // Exposure controls
+        const exposureSlider = document.getElementById('exposureSlider');
+        const exposureValue = document.getElementById('exposureValue');
+        const expComp = s.exposure_comp || 0;
+        if (!exposureSlider.matches(':active')) {
+            exposureSlider.value = expComp.toFixed(1);
+        }
+        exposureValue.textContent = expComp.toFixed(1);
+
+        const gainSlider = document.getElementById('gainSlider');
+        const gainValue = document.getElementById('gainValue');
+        const ag = s.analogue_gain || 1.0;
+        if (!gainSlider.matches(':active')) {
+            gainSlider.value = ag.toFixed(1);
+        }
+        gainValue.textContent = ag.toFixed(1);
     
     // Update mute button
     const muteBtn = document.getElementById('muteBtn');
@@ -588,6 +623,32 @@ document.getElementById('flipBtn').addEventListener('click', async () => {
         tick();
     } catch (e) {}
 });
+
+// Exposure compensation slider handler
+let exposureTimeout = null;
+document.getElementById('exposureSlider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('exposureValue').textContent = val.toFixed(1);
+    if (exposureTimeout) clearTimeout(exposureTimeout);
+    exposureTimeout = setTimeout(async () => {
+        try {
+            await fetch('/exposure_comp?value=' + val);
+        } catch (e) {}
+    }, 200);
+});
+
+// Analogue gain slider handler
+let gainTimeout = null;
+document.getElementById('gainSlider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('gainValue').textContent = val.toFixed(1);
+    if (gainTimeout) clearTimeout(gainTimeout);
+    gainTimeout = setTimeout(async () => {
+        try {
+            await fetch('/analogue_gain?value=' + val);
+        } catch (e) {}
+    }, 200);
+});
 </script>
 </body>
 </html>
@@ -689,6 +750,32 @@ document.getElementById('flipBtn').addEventListener('click', async () => {
             shared.status.flip = flip_enabled
         return jsonify({"flip": flip_enabled})
 
+    @app.route("/exposure_comp")
+    def exposure_comp():
+        from flask import request
+        value = request.args.get('value')
+        try:
+            ec = float(value)
+            ec = max(-4.0, min(4.0, ec))
+            with shared.lock:
+                shared.status.exposure_comp = ec
+            return jsonify({"exposure_comp": ec})
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid value"}), 400
+
+    @app.route("/analogue_gain")
+    def analogue_gain():
+        from flask import request
+        value = request.args.get('value')
+        try:
+            ag = float(value)
+            ag = max(1.0, min(8.0, ag))
+            with shared.lock:
+                shared.status.analogue_gain = ag
+            return jsonify({"analogue_gain": ag})
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid value"}), 400
+
     return app
 
 
@@ -782,6 +869,8 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
             "AfTrigger": 0,
             "AeEnable": True,
             "AwbEnable": True,
+            "AnalogueGain": args.analogue_gain,
+            "ExposureValue": args.exposure_comp,
         })
 
         def read_frame() -> Optional[np.ndarray]:
@@ -800,6 +889,8 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
         # Enable auto exposure and auto white balance for USB camera
         cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Auto exposure enabled
         cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)      # Autofocus enabled
+        # Exposure compensation: higher values = brighter (typical range -4 to 4)
+        cap.set(cv2.CAP_PROP_EXPOSURE, args.exposure_comp)
 
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video device {args.video_device}")
@@ -1032,6 +1123,9 @@ def main() -> None:
 
     ap.add_argument("--flip-code", type=int, default=-1, help="OpenCV flip code: -1 both, 0 vertical, 1 horizontal")
 
+    ap.add_argument("--exposure-comp", type=float, default=0.0, help="Exposure compensation (-4.0 to 4.0, higher=brighter)")
+    ap.add_argument("--analogue-gain", type=float, default=1.0, help="Analogue gain for Pi camera (1.0 to 8.0)")
+
     ap.add_argument("--tts-cooldown", type=float, default=1.0)
     ap.add_argument("--speak-mode", choices=["change", "repeat"], default="change")
     ap.add_argument("--repeat-interval", type=float, default=5.0)
@@ -1042,6 +1136,8 @@ def main() -> None:
     shared.status.motion_threshold = args.motion_threshold
     shared.status.dark_threshold = args.dark_threshold
     shared.status.flip = args.flip_code != 0  # Initialize flip based on args
+    shared.status.exposure_comp = args.exposure_comp
+    shared.status.analogue_gain = args.analogue_gain
     
     # Initialize TTS
     tts_phrases = ["Bluebird", "Not bluebird", "Not a bird"]
