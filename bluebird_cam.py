@@ -190,6 +190,7 @@ class Status:
     power_watts: float = 0.0
     power_avg_watts: float = 0.0
     battery_runtime_hours: float = 0.0
+    battery_percent: float = 100.0
 
     storage_free_gb: float = 0.0
     storage_total_gb: float = 0.0
@@ -289,7 +290,10 @@ def power_monitor_worker(shared: Shared, battery_wh: float, avg_window: int) -> 
                 power_history.append(total_power)
                 
                 avg_power = sum(power_history) / len(power_history) if power_history else 0.0
-                runtime_hours = battery_wh / avg_power if avg_power > 0 else 0.0
+                with shared.lock:
+                    percent = shared.status.battery_percent
+                remaining_wh = battery_wh * max(0.0, min(100.0, percent)) / 100.0
+                runtime_hours = remaining_wh / avg_power if avg_power > 0 else 0.0
                 
                 with shared.lock:
                     shared.status.power_watts = total_power
@@ -360,9 +364,16 @@ a { color: #9db7ff; text-decoration: none; }
   <div class="box">
     <div class="row">
       <div class="pill" id="power">Power</div>
-      <div class="pill" id="battery">Runtime</div>
+            <div class="pill" id="battery">Runtime</div>
             <div class="pill" id="storage">Storage</div>
     </div>
+        <div class="row" style="gap: 16px; margin-top: 8px;">
+                <div class="pill" style="flex: 1; max-width: 400px;">
+                        <label for="batterySlider" style="margin-right: 8px;">Battery %</label>
+                        <input type="range" id="batterySlider" min="0" max="100" value="100" style="width: 200px; vertical-align: middle;"/>
+                        <span id="batteryValue" style="margin-left: 8px;">100%</span>
+                </div>
+        </div>
   </div>
 
     <div class="box">
@@ -438,6 +449,7 @@ async function tick() {
     const pwr = s.power_watts || 0;
     const avg = s.power_avg_watts || 0;
     const hrs = s.battery_runtime_hours || 0;
+        const batteryPct = typeof s.battery_percent === 'number' ? s.battery_percent : 100;
     const days = Math.floor(hrs / 24);
     const h = Math.floor(hrs % 24);
     const m = Math.floor((hrs * 60) % 60);
@@ -447,7 +459,7 @@ async function tick() {
       'Power ' + pwr.toFixed(2) + 'W avg ' + avg.toFixed(2) + 'W';
     
     document.getElementById('battery').textContent =
-      'Runtime ' + runtime + ' on 50Wh';
+            'Runtime ' + runtime + ' at ' + batteryPct.toFixed(0) + '% of 50Wh';
 
         const freeGb = s.storage_free_gb || 0;
         const totalGb = s.storage_total_gb || 0;
@@ -471,6 +483,15 @@ async function tick() {
             darkSlider.value = darkVal;
         }
         darkValue.textContent = darkVal.toString();
+
+        // Battery slider
+        const batterySlider = document.getElementById('batterySlider');
+        const batteryValue = document.getElementById('batteryValue');
+        const batteryVal = Math.round(batteryPct);
+        if (!batterySlider.matches(':active')) {
+            batterySlider.value = batteryVal;
+        }
+        batteryValue.textContent = batteryVal.toString() + '%';
     
     // Update mute button
     const muteBtn = document.getElementById('muteBtn');
@@ -588,6 +609,19 @@ document.getElementById('flipBtn').addEventListener('click', async () => {
         tick();
     } catch (e) {}
 });
+
+// Battery slider handler
+let batteryTimeout = null;
+document.getElementById('batterySlider').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    document.getElementById('batteryValue').textContent = val.toString() + '%';
+    if (batteryTimeout) clearTimeout(batteryTimeout);
+    batteryTimeout = setTimeout(async () => {
+        try {
+            await fetch('/battery?value=' + val);
+        } catch (err) {}
+    }, 200);
+});
 </script>
 </body>
 </html>
@@ -688,6 +722,19 @@ document.getElementById('flipBtn').addEventListener('click', async () => {
         with shared.lock:
             shared.status.flip = flip_enabled
         return jsonify({"flip": flip_enabled})
+
+    @app.route("/battery")
+    def battery():
+        from flask import request
+        value = request.args.get('value')
+        try:
+            pct = float(value)
+            pct = max(0.0, min(100.0, pct))
+            with shared.lock:
+                shared.status.battery_percent = pct
+            return jsonify({"battery_percent": pct})
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid value"}), 400
 
     return app
 
