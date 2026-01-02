@@ -833,8 +833,8 @@ def camera_worker(args, shared: Shared, tts: CachedPiperTTS) -> None:
 
         def read_frame() -> Optional[np.ndarray]:
             try:
-                frame_rgb = picam.capture_array()
-                return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                # picamera2 returns frames as BGR already when using RGB888 config
+                return picam.capture_array()
             except Exception:
                 return None
 
