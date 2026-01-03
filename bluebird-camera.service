@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi
+ExecStartPre=amixer -D pulse sset Master 100%
 ExecStart=/usr/bin/python3 /home/pi/bluebird/bluebird_cam.py \
     --model-dir /home/pi/models/Birds-Classifier-EfficientNetB2 \
     --piper-model /home/pi/models/en_US-lessac-medium.onnx \
