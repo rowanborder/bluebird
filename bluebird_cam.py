@@ -88,7 +88,7 @@ class CachedPiperTTS:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         
-        self.muted = False
+        self.muted = True
         self.volume = 1.0
         self.lock = threading.Lock()
 
