@@ -18,6 +18,8 @@ fi
 if [ -f "$SERVICE_PATH" ]; then
    systemctl stop "$SERVICE_FILE"
    systemctl disable "$SERVICE_FILE"
+   rm "$SERVICE_PATH"
+   echo "Removed existing service."
 fi
 
 # Copy service file
