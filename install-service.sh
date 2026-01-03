@@ -15,6 +15,11 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+if [ -f "$SERVICE_PATH" ]; then
+   systemctl stop "$SERVICE_FILE"
+   systemctl disable "$SERVICE_FILE"
+fi
+
 # Copy service file
 echo "Copying service file to $SERVICE_PATH..."
 cp "$SCRIPT_DIR/$SERVICE_FILE" "$SERVICE_PATH"
