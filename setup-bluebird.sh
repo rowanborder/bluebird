@@ -25,12 +25,6 @@ sudo sh -c 'echo "camera_auto_detect=0" >> /boot/firmware/config.txt'
 sudo sh -c 'echo "dtoverlay=imx708,cam0" >> /boot/firmware/config.txt'
 sudo sh -c 'echo "dtoverlay=imx708,cam1" >> /boot/firmware/config.txt'
 
-crontab -l > mycron
-echo "@reboot amixer -D pulse sset Master 100%" >> mycron
-crontab mycron
-rm mycron
-
-sudo chmod +x install-service.sh
 sudo ./install-service.sh
 
 echo "Setup complete! Rebooting your Raspberry Pi to apply camera settings."
