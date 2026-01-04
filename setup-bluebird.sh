@@ -31,7 +31,7 @@ crontab mycron
 rm mycron
 
 sudo chmod +x install-service.sh
-./install-service.sh
+sudo ./install-service.sh
 
 echo "Setup complete! Rebooting your Raspberry Pi to apply camera settings."
 
